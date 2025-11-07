@@ -2,30 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LAN P2P Chat</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LAN P2P Chat — Simple</title>
 <style>
-  body{font-family:sans-serif;background:#0f1724;color:#e6eef8;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px;height:100vh;margin:0;}
+  body{font-family:sans-serif;background:#0f1724;color:#e6eef8;display:flex;flex-direction:column;align-items:center;padding:20px;margin:0;}
   h1{margin-bottom:6px;}
   .chat{display:flex;flex-direction:column;gap:10px;width:100%;max-width:500px;}
-  .messages{flex:1;overflow:auto;background:#0b1220;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);height:400px;}
+  .messages{flex:1;overflow:auto;background:#0b1220;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.05);height:300px;}
   .msg{margin-bottom:6px;}
   .msg.me{text-align:right;color:#34d399;}
   .msg.peer{text-align:left;color:#60a5fa;}
-  input, button{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);background:#0b1220;color:#e6eef8;font-size:14px;}
+  input, button, textarea{padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.05);background:#0b1220;color:#e6eef8;font-size:14px;width:100%;box-sizing:border-box;}
   .inputrow{display:flex;gap:8px;}
   .controls{margin-bottom:12px;display:flex;flex-direction:column;gap:8px;}
-  textarea{width:100%;height:120px;background:#0b1220;color:#e6eef8;border-radius:6px;padding:8px;font-family:monospace;}
+  textarea{height:100px;font-family:monospace;}
+  #log{background:#111827;color:#94a3b8;padding:6px;border-radius:6px;height:80px;overflow:auto;font-size:12px;}
 </style>
 </head>
 <body>
-<h1>LAN P2P Chat</h1>
-<p>Host: click "Create Connection". Connect: enter host's Local SDP below.</p>
+<h1>LAN P2P Chat — Simplified</h1>
 
 <div class="controls">
-  <button id="createConn">Create Connection (Host)</button>
-  <button id="connectTo">Connect to Host</button>
-  <textarea id="hostSDP" placeholder="Host SDP / paste here if connecting"></textarea>
+  <button id="createBtn">Create Local Blob</button>
+  <button id="pasteBtn">Paste Remote Blob</button>
+  <button id="copyBtn">Copy Local Blob</button>
+  <textarea id="blobArea" placeholder="Local / Remote blob appears here..."></textarea>
 </div>
 
 <div class="chat">
@@ -36,12 +37,17 @@
   </div>
 </div>
 
+<div id="log"></div>
+
 <script>
 let pc, dc;
 const messages=document.getElementById('messages');
 const msgInput=document.getElementById('msgInput');
 const sendBtn=document.getElementById('sendBtn');
-const hostSDP=document.getElementById('hostSDP');
+const blobArea=document.getElementById('blobArea');
+const logDiv=document.getElementById('log');
+
+function log(msg){const d=document.createElement('div');d.textContent=msg;logDiv.appendChild(d);logDiv.scrollTop=logDiv.scrollHeight;}
 
 function appendMessage(txt,type='peer'){const d=document.createElement('div');d.className='msg '+(type==='me'?'me':'peer');d.textContent=txt;messages.appendChild(d);messages.scrollTop=messages.scrollHeight;}
 
@@ -53,46 +59,48 @@ async function createPeerConnection(isOfferer){
   }else{
     pc.ondatachannel=e=>wireDataChannel(e.channel,false);
   }
-  pc.oniceconnectionstatechange=()=>console.log('ICE',pc.iceConnectionState);
+  pc.oniceconnectionstatechange=()=>log('ICE: '+pc.iceConnectionState);
   return pc;
 }
 
 function wireDataChannel(channel,createdByLocal){
   dc=channel;
-  dc.onopen=()=>{msgInput.disabled=false;sendBtn.disabled=false;appendMessage(createdByLocal?'[you opened channel]':'[peer opened channel]','peer');};
+  dc.onopen=()=>{msgInput.disabled=false;sendBtn.disabled=false;log(createdByLocal?'[you opened channel]':'[peer opened channel]');};
   dc.onmessage=e=>appendMessage(e.data,'peer');
-  dc.onclose=()=>{appendMessage('[datachannel closed]','peer');msgInput.disabled=true;sendBtn.disabled=true;};
+  dc.onclose=()=>{log('[datachannel closed]');msgInput.disabled=true;sendBtn.disabled=true;};
 }
 
-async function createConnection(){
+async function createLocalBlob(){
   await createPeerConnection(true);
   const offer=await pc.createOffer();
   await pc.setLocalDescription(offer);
-  await new Promise(res=>{
-    const interval=setInterval(()=>{if(pc.iceGatheringState==='complete'){clearInterval(interval);res();}},100);
-    setTimeout(res,3000);
-  });
-  hostSDP.value=JSON.stringify(pc.localDescription);
-  alert('Copy this SDP and give to the connecting device');
+  await new Promise(res=>{const i=setInterval(()=>{if(pc.iceGatheringState==='complete'){clearInterval(i);res();}},100);setTimeout(res,3000);});
+  blobArea.value=JSON.stringify(pc.localDescription);
+  log('Local blob ready. Copy and give to peer.');
 }
 
-async function connectToHost(){
-  const sdp=hostSDP.value.trim();
-  if(!sdp)return alert('Paste host SDP first');
-  await createPeerConnection(false);
-  await pc.setRemoteDescription(JSON.parse(sdp));
-  const answer=await pc.createAnswer();
-  await pc.setLocalDescription(answer);
-  await new Promise(res=>{
-    const interval=setInterval(()=>{if(pc.iceGatheringState==='complete'){clearInterval(interval);res();}},100);
-    setTimeout(res,3000);
-  });
-  hostSDP.value=JSON.stringify(pc.localDescription);
-  alert('Send this answer back to host and paste it there in the same box');
+async function pasteRemoteBlob(){
+  const sdp=blobArea.value.trim();
+  if(!sdp)return alert('Paste peer blob first!');
+  const parsed=JSON.parse(sdp);
+  if(parsed.type==='offer'){
+    await createPeerConnection(false);
+    await pc.setRemoteDescription(parsed);
+    const answer=await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await new Promise(res=>{const i=setInterval(()=>{if(pc.iceGatheringState==='complete'){clearInterval(i);res();}},100);setTimeout(res,3000);});
+    blobArea.value=JSON.stringify(pc.localDescription);
+    log('Answer blob ready. Send back to host.');
+  }else{
+    if(!pc) return alert('You must create local blob first (host)!');
+    await pc.setRemoteDescription(parsed);
+    log('Remote blob applied. Connection should open soon.');
+  }
 }
 
-createConn.onclick=createConnection;
-connectTo.onclick=connectToHost;
+document.getElementById('createBtn').onclick=createLocalBlob;
+document.getElementById('pasteBtn').onclick=pasteRemoteBlob;
+document.getElementById('copyBtn').onclick=()=>{blobArea.select();document.execCommand('copy');log('Local blob copied.');};
 
 sendBtn.onclick=()=>{
   const v=msgInput.value.trim();if(!v||!dc||dc.readyState!=='open')return;
