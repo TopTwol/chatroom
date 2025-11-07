@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Manual WebRTC LAN Chat — No Server</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#60a5fa; --accent-2:#34d399;
+    --glass: rgba(255,255,255,0.03);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  html,body{height:100%; margin:0; background:
+    linear-gradient(180deg, rgba(6,8,15,1) 0%, rgba(12,16,28,1) 60%); color:#e6eef8;}
+  .wrap{max-width:1100px; margin:28px auto; padding:20px; display:grid; gap:18px;
+        grid-template-columns: 420px 1fr; align-items:start;}
+  header{grid-column:1/-1; display:flex; gap:12px; align-items:center;}
+  header h1{font-size:18px;margin:0;font-weight:600;}
+  header p{margin:0;color:var(--muted);font-size:13px;}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        border:1px solid rgba(255,255,255,0.04); padding:12px; border-radius:10px; box-shadow:0 6px 30px rgba(2,6,23,0.6);}
+  .controls{display:flex; flex-direction:column; gap:10px;}
+  label{font-size:13px;color:var(--muted); margin-bottom:6px; display:block;}
+  textarea{width:100%; min-height:110px; resize:vertical; background:var(--glass); color:inherit;
+           border-radius:8px; padding:10px; border:1px solid rgba(255,255,255,0.03); font-family:monospace; font-size:13px;}
+  .btnrow{display:flex; gap:8px; flex-wrap:wrap;}
+  button{background:linear-gradient(180deg,var(--accent), #2b81f0); border:0; color:white; padding:8px 10px;
+         border-radius:8px; cursor:pointer; font-weight:600; font-size:13px;}
+  .ghost{background:transparent; border:1px solid rgba(255,255,255,0.06); color:var(--muted); font-weight:600;}
+  .muted{background:transparent;color:var(--muted); border:0; padding:0; font-size:12px;}
+  .small{font-size:12px;padding:6px 8px;border-radius:6px;}
+  .status{font-size:13px;color:var(--muted); margin-top:6px;}
+  /* Chat panel */
+  .chat{display:flex; flex-direction:column; height:640px; gap:10px;}
+  .messages{flex:1; overflow:auto; padding:12px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); border:1px solid rgba(255,255,255,0.03);}
+  .msg{margin-bottom:8px; font-size:14px; line-height:1.3;}
+  .msg.me{text-align:right;color:#dbeafe;}
+  .msg.peer{color:#cdeccd;}
+  .inputrow{display:flex; gap:8px;}
+  .inputrow input{flex:1; border-radius:8px; padding:10px; border:1px solid rgba(255,255,255,0.03); background:var(--glass); color:inherit; font-size:14px;}
+  .hint{font-size:12px;color:var(--muted); margin-top:6px;}
+  footer{grid-column:1/-1; color:var(--muted); font-size:12px; text-align:center;}
+  .topcontrols{display:flex; gap:8px; align-items:center;}
+  .copybtn{background:linear-gradient(180deg,var(--accent-2), #10b981); padding:8px 10px;}
+  @media (max-width:980px){
+    .wrap{grid-template-columns: 1fr; padding:12px;}
+    .chat{height:520px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div style="flex:1">
+      <h1>Manual WebRTC LAN Chat — Server-free (copy/paste SDP)</h1>
+      <p>Use this page on both Chromebooks on the same Wi-Fi. Copy the "Local" blob to the other machine, and paste the "Remote" blob back to complete the handshake.</p>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:13px;color:var(--muted)">STUN: <span id="stunUrl">stun:stun.l.google.com:19302</span></div>
+      <div id="connState" class="status">Idle</div>
+    </div>
+  </header>
+
+  <!-- Left column: manual signaling -->
+  <div class="card controls">
+    <div>
+      <label>Local SDP (copy this to the other computer)</label>
+      <textarea id="localSDP" placeholder="Local SDP will appear here..." readonly></textarea>
+      <div class="btnrow" style="margin-top:8px">
+        <button id="createOffer">Create Offer</button>
+        <button id="createAnswer" class="ghost">Create Answer (from pasted Offer)</button>
+        <button id="copyLocal" class="copybtn small">Copy Local</button>
+        <button id="downloadLocal" class="ghost small">Download</button>
+      </div>
+    </div>
+
+    <hr style="margin:12px 0;border:0;border-top:1px solid rgba(255,255,255,0.03)">
+
+    <div>
+      <label>Remote SDP (paste remote's blob here)</label>
+      <textarea id="remoteSDP" placeholder="Paste remote SDP here..."></textarea>
+      <div class="btnrow" style="margin-top:8px">
+        <button id="pasteRemote" class="small ghost">Set Remote (Answer or Offer)</button>
+        <button id="clearText" class="muted">Clear</button>
+      </div>
+      <div class="hint">Flow for two users:
+        <ol style="padding-left:18px;margin:6px 0 0 0">
+          <li>User A: Create Offer → copy local SDP → send to B</li>
+          <li>User B: paste into Remote → Create Answer → copy local SDP → send to A</li>
+          <li>User A: paste answer into Remote → Set Remote → connection opens</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column: chat -->
+  <div class="card chat">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div><strong>Chat</strong> <span style="color:var(--muted); font-size:13px; margin-left:8px" id="peerInfo">— no peer</span></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="disconnect" class="ghost small">Disconnect</button>
+        <button id="reset" class="muted small">Reset & Reload</button>
+      </div>
+    </div>
+
+    <div id="messages" class="messages"></div>
+
+    <div class="inputrow">
+      <input id="msgInput" placeholder="Type a message..." disabled />
+      <button id="sendBtn" class="small" disabled>Send</button>
+    </div>
+
+    <div class="status" id="log">Initialize the page on both devices and follow the copy/paste flow.</div>
+  </div>
+
+  <footer class="card">
+    This page performs only local WebRTC operations. No server required — you manually exchange SDPs. Keep both pages open; reloading breaks connections.
+  </footer>
+</div>
+
+<script>
+(async function(){
+  // UI elements
+  const localSDP = document.getElementById('localSDP');
+  const remoteSDP = document.getElementById('remoteSDP');
+  const createOfferBtn = document.getElementById('createOffer');
+  const createAnswerBtn = document.getElementById('createAnswer');
+  const copyLocalBtn = document.getElementById('copyLocal');
+  const downloadLocalBtn = document.getElementById('downloadLocal');
+  const pasteRemoteBtn = document.getElementById('pasteRemote');
+  const clearTextBtn = document.getElementById('clearText');
+  const messages = document.getElementById('messages');
+  const msgInput = document.getElementById('msgInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const log = document.getElementById('log');
+  const connState = document.getElementById('connState');
+  const peerInfo = document.getElementById('peerInfo');
+  const disconnectBtn = document.getElementById('disconnect');
+  const resetBtn = document.getElementById('reset');
+
+  // Basic state
+  let pc = null;
+  let dc = null; // data channel reference
+  let isOfferer = false;
+
+  const stunUrl = 'stun:stun.l.google.com:19302';
+  document.getElementById('stunUrl').textContent = stunUrl;
+
+  function logStatus(s){ log.textContent = s; }
+  function setConnState(s){ connState.textContent = s; }
+
+  function appendMessage(text, klass='peer'){
+    const d = document.createElement('div');
+    d.className = 'msg ' + (klass === 'me' ? 'me' : 'peer');
+    d.textContent = text;
+    messages.appendChild(d);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  async function createPeerConnection(){
+    // if there's an existing PC, close it first
+    if(pc){
+      try{ pc.close(); }catch(e){}
+      pc = null; dc = null;
+    }
+    pc = new RTCPeerConnection({
+      iceServers: [{urls: stunUrl}]
+    });
+
+    pc.oniceconnectionstatechange = ()=> {
+      setConnState('ICE: ' + pc.iceConnectionState);
+    };
+
+    // catch candidate null to know when gathering finished
+    // we will still watch 'icecandidate' events when creating offer/answer
+    pc.ondatachannel = (ev)=>{
+      dc = ev.channel;
+      wireDataChannel(dc, false);
+      peerInfo.textContent = 'DataChannel created by remote';
+    };
+
+    return pc;
+  }
+
+  function wireDataChannel(channel, createdByLocal){
+    dc = channel;
+    dc.onopen = ()=> {
+      setConnState('DataChannel open');
+      msgInput.disabled = false;
+      sendBtn.disabled = false;
+      appendMessage(createdByLocal ? '[you opened channel]' : '[peer opened channel]', 'peer');
+    };
+    dc.onmessage = (ev)=> {
+      appendMessage(ev.data, 'peer');
+    };
+    dc.onclose = ()=> {
+      setConnState('DataChannel closed');
+      msgInput.disabled = true;
+      sendBtn.disabled = true;
+      appendMessage('[datachannel closed]', 'peer');
+    };
+    dc.onerror = (e)=> {
+      appendMessage('[datachannel error: ' + (e && e.message || e) + ']', 'peer');
+    };
+  }
+
+  // Wait for ice gathering to finish (detect candidate null) or timeout
+  function waitForIceGathering(pc, timeoutMs = 7000){
+    return new Promise(resolve => {
+      if(!pc) return resolve();
+      if(pc.iceGatheringState === 'complete') return resolve();
+      function check(e){
+        if(e && e.candidate === null){
+          pc.removeEventListener('icecandidate', check);
+          resolve();
+        }
+      }
+      pc.addEventListener('icecandidate', check);
+      // fallback timeout
+      setTimeout(()=> {
+        try{ pc.removeEventListener('icecandidate', check); }catch(e){}
+        resolve();
+      }, timeoutMs);
+    });
+  }
+
+  async function createOffer(){
+    isOfferer = true;
+    await createPeerConnection();
+    // create datachannel as offerer
+    const channel = pc.createDataChannel('chat');
+    wireDataChannel(channel, true);
+    peerInfo.textContent = 'Created local data channel (offerer)';
+
+    setConnState('Creating offer...');
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    // wait for ice
+    await waitForIceGathering(pc);
+    // now localDescription should include ICE candidates
+    localSDP.value = JSON.stringify(pc.localDescription);
+    setConnState('Offer ready — copy & send to peer');
+    logStatus('Offer created. Copy the Local SDP to the other device.');
+    createAnswerBtn.disabled = false;
+  }
+
+  async function createAnswerFromOffer(offerSDPstr){
+    // assume offerSDPstr is the string pasted from remote's localSDP
+    try{
+      const offer = JSON.parse(offerSDPstr);
+      await createPeerConnection();
+      setConnState('Setting remote (offer)...');
+      await pc.setRemoteDescription(offer);
+      // create answer
+      setConnState('Creating answer...');
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      // wait for ice
+      await waitForIceGathering(pc);
+      localSDP.value = JSON.stringify(pc.localDescription);
+      setConnState('Answer ready — copy & send to peer');
+      logStatus('Answer created. Copy Local SDP and send back to the offerer.');
+      // when answerer gets a datachannel 'ondatachannel' will fire and wireDataChannel will be called
+    }catch(err){
+      console.error(err);
+      alert('Failed to create answer. Make sure the pasted offer is valid JSON SDP.');
+    }
+  }
+
+  async function setRemoteDescriptionFromText(sdpStr){
+    if(!pc){
+      // If we are the answering side and haven't created pc yet, create it
+      await createPeerConnection();
+    }
+    try{
+      const desc = JSON.parse(sdpStr);
+      await pc.setRemoteDescription(desc);
+      setConnState('Remote description set');
+      logStatus('Remote description applied. If you created an offer earlier, connection should start.');
+    }catch(err){
+      console.error(err);
+      alert('Failed to set remote description. Make sure the pasted SDP is valid JSON.');
+    }
+  }
+
+  // UI events
+  createOfferBtn.addEventListener('click', async ()=>{
+    createOfferBtn.disabled = true;
+    createAnswerBtn.disabled = true;
+    try{
+      await createOffer();
+    }catch(err){
+      console.error(err);
+      alert('Error creating offer: ' + (err && err.message || err));
+      createOfferBtn.disabled = false;
+    }
+  });
+
+  createAnswerBtn.addEventListener('click', async ()=>{
+    const remote = remoteSDP.value.trim();
+    if(!remote){
+      alert('Paste the remote OFFER into the Remote SDP box first (the offer from the other device).');
+      return;
+    }
+    createAnswerBtn.disabled = true;
+    try{
+      await createAnswerFromOffer(remote);
+    }catch(err){
+      console.error(err);
+      createAnswerBtn.disabled = false;
+    }
+  });
+
+  pasteRemoteBtn.addEventListener('click', async ()=>{
+    const r = remoteSDP.value.trim();
+    if(!r) { alert('Remote SDP box is empty. Paste remote SDP there first.'); return; }
+    // If this looks like an OFFER and we don't have local created, allow quick "Create Answer" flow.
+    try{
+      const parsed = JSON.parse(r);
+      if(parsed.type === 'offer'){
+        // Offer -> create answer
+        if(!confirm('Remote looks like an offer. Create an answer for it now?')) return;
+        createAnswerBtn.disabled = true;
+        await createAnswerFromOffer(r);
+        return;
+      } else {
+        // Possibly an answer: set remote (for offerer)
+        await setRemoteDescriptionFromText(r);
+      }
+    }catch(err){
+      alert('Remote blob not valid JSON SDP. Paste the exact text from the other device\'s Local SDP.');
+    }
+  });
+
+  copyLocalBtn.addEventListener('click', async ()=>{
+    const txt = localSDP.value;
+    if(!txt) return alert('No Local SDP to copy yet.');
+    try{
+      await navigator.clipboard.writeText(txt);
+      logStatus('Local SDP copied to clipboard.');
+    }catch(e){
+      // fallback
+      localSDP.select();
+      document.execCommand('copy');
+      logStatus('Local SDP selected; fallback copy executed — press Ctrl+C if needed.');
+    }
+  });
+
+  downloadLocalBtn.addEventListener('click', ()=>{
+    const txt = localSDP.value;
+    if(!txt) return alert('No Local SDP to download.');
+    const blob = new Blob([txt], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'webrtc-sdp.json'; document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 2000);
+  });
+
+  clearTextBtn.addEventListener('click', ()=>{
+    remoteSDP.value = '';
+  });
+
+  sendBtn.addEventListener('click', ()=>{
+    const v = msgInput.value.trim();
+    if(!v || !dc || dc.readyState !== 'open') return;
+    dc.send(v);
+    appendMessage(v, 'me');
+    msgInput.value = '';
+  });
+
+  msgInput.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendBtn.click(); }
+  });
+
+  disconnectBtn.addEventListener('click', ()=>{
+    if(dc) try{ dc.close(); } catch(e){}
+    if(pc) try{ pc.close(); } catch(e){}
+    pc = null; dc = null;
+    msgInput.disabled = true; sendBtn.disabled = true;
+    setConnState('Disconnected');
+    logStatus('Manual disconnect executed. Reload page to start again.');
+    peerInfo.textContent = '— no peer';
+  });
+
+  resetBtn.addEventListener('click', ()=>{
+    location.reload();
+  });
+
+  // helper: if someone pastes an answer (remote) and we're the offerer waiting
+  // provide a small heuristic: if a local offer exists and remote is answer -> setRemoteDescription
+  // also if remote looks like answer and pc exists -> set remote
+  remoteSDP.addEventListener('input', ()=>{
+    try{
+      const parsed = JSON.parse(remoteSDP.value);
+      if(parsed && parsed.type === 'answer' && pc && pc.signalingState !== 'closed'){
+        // enable a friendly one-click set
+        pasteRemoteBtn.textContent = 'Set Remote (apply answer)';
+        pasteRemoteBtn.classList.remove('ghost');
+      } else if(parsed && parsed.type === 'offer'){
+        pasteRemoteBtn.textContent = 'Create Answer (from offer)';
+        pasteRemoteBtn.classList.remove('ghost');
+      } else {
+        pasteRemoteBtn.textContent = 'Set Remote (Answer or Offer)';
+        pasteRemoteBtn.classList.add('ghost');
+      }
+    }catch(e){
+      pasteRemoteBtn.textContent = 'Set Remote (Answer or Offer)';
+      pasteRemoteBtn.classList.add('ghost');
+    }
+  });
+
+  // initial hints
+  logStatus('Ready. On device A: click Create Offer. On device B: paste Offer and Create Answer.');
+  setConnState('Idle');
+
+  // small UX: try to auto-detect paste from clipboard to speed manual exchange
+  // (optional, won't work on all browsers due to clipboard permission)
+  async function tryAutoPasteOnFocus(){
+    // don't force; only run when user interacts (click) with remote box
+    remoteSDP.addEventListener('focus', async ()=>{
+      try{
+        const txt = await navigator.clipboard.readText();
+        if(txt && txt.length > 50 && !remoteSDP.value){
+          if(confirm('Clipboard contains text. Paste clipboard into Remote SDP box?')) remoteSDP.value = txt;
+        }
+      }catch(e){}
+    }, {once:true});
+  }
+  tryAutoPasteOnFocus();
+
+})();
+</script>
+</body>
+</html>
